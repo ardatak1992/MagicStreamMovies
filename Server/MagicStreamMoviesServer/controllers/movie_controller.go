@@ -22,16 +22,15 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-var movieCollection *mongo.Collection = database.OpenCollection("movies")
-var rankingCollection *mongo.Collection = database.OpenCollection("rankings")
 var validate = validator.New()
 
-func GetMovies() gin.HandlerFunc {
+func GetMovies(client *mongo.Client) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(c, 100*time.Second)
 		defer cancel()
 
+		var movieCollection *mongo.Collection = database.OpenCollection("movies", client)
 		var movies []models.Movie
 
 		cursor, err := movieCollection.Find(ctx, bson.M{})
@@ -50,9 +49,9 @@ func GetMovies() gin.HandlerFunc {
 	}
 }
 
-func GetMovie() gin.HandlerFunc {
+func GetMovie(client *mongo.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(c, 100*time.Second)
 		defer cancel()
 
 		movieID := c.Param("imdb_id")
@@ -63,6 +62,7 @@ func GetMovie() gin.HandlerFunc {
 		}
 
 		var movie models.Movie
+		var movieCollection *mongo.Collection = database.OpenCollection("movies", client)
 
 		err := movieCollection.FindOne(ctx, bson.M{"imdb_id": movieID}).Decode(&movie)
 		if err != nil {
@@ -75,9 +75,9 @@ func GetMovie() gin.HandlerFunc {
 	}
 }
 
-func AddMovie() gin.HandlerFunc {
+func AddMovie(client *mongo.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(c, 100*time.Second)
 		defer cancel()
 
 		var movie models.Movie
@@ -91,6 +91,7 @@ func AddMovie() gin.HandlerFunc {
 			return
 		}
 
+		var movieCollection *mongo.Collection = database.OpenCollection("movies", client)
 		result, err := movieCollection.InsertOne(ctx, movie)
 
 		if err != nil {
@@ -103,7 +104,7 @@ func AddMovie() gin.HandlerFunc {
 	}
 }
 
-func AdminReviewUpdate() gin.HandlerFunc {
+func AdminReviewUpdate(client *mongo.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		role, err := utils.GetRoleFromContext(c)
@@ -137,7 +138,7 @@ func AdminReviewUpdate() gin.HandlerFunc {
 			return
 		}
 
-		sentiment, rankVal, err := GetReviewRanking(req.AdminReview)
+		sentiment, rankVal, err := GetReviewRanking(c, client, req.AdminReview)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error getting review ranking", "details": err.Error()})
 			return
@@ -153,9 +154,10 @@ func AdminReviewUpdate() gin.HandlerFunc {
 				}},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(c, 100*time.Second)
 		defer cancel()
 
+		var movieCollection *mongo.Collection = database.OpenCollection("movies", client)
 		result, err := movieCollection.UpdateOne(ctx, filter, update)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error updating movie"})
@@ -175,8 +177,8 @@ func AdminReviewUpdate() gin.HandlerFunc {
 	}
 }
 
-func GetReviewRanking(admin_review string) (string, int, error) {
-	rankings, err := GetRankings()
+func GetReviewRanking(c *gin.Context, client *mongo.Client, admin_review string) (string, int, error) {
+	rankings, err := GetRankings(c, client)
 	if err != nil {
 		return "", 0, err
 	}
@@ -209,7 +211,7 @@ func GetReviewRanking(admin_review string) (string, int, error) {
 	basePromptTemplate := os.Getenv("BASE_PROMPT_TEMPLATE")
 	basePrompt := strings.Replace(basePromptTemplate, "{rankings}", sentimentDelimited, 1)
 
-	response, err := llm.Call(context.Background(), basePrompt+admin_review)
+	response, err := llm.Call(c, basePrompt+admin_review)
 	if err != nil {
 		return "", 0, err
 	}
@@ -227,12 +229,13 @@ func GetReviewRanking(admin_review string) (string, int, error) {
 
 }
 
-func GetRankings() ([]models.Ranking, error) {
+func GetRankings(c *gin.Context, client *mongo.Client) ([]models.Ranking, error) {
 	var rankings []models.Ranking
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	ctx, cancel := context.WithTimeout(c, 100*time.Second)
 	defer cancel()
 
+	var rankingCollection *mongo.Collection = database.OpenCollection("rankings", client)
 	cursor, err := rankingCollection.Find(ctx, bson.M{})
 	if err != nil {
 		return nil, err
@@ -247,7 +250,7 @@ func GetRankings() ([]models.Ranking, error) {
 
 }
 
-func GetRecommendedMovies() gin.HandlerFunc {
+func GetRecommendedMovies(client *mongo.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId, err := utils.GetUserIdFromContext(c)
 		if err != nil {
@@ -255,7 +258,7 @@ func GetRecommendedMovies() gin.HandlerFunc {
 			return
 		}
 
-		favouriteGenres, err := GetUsersFavouriteGenres(userId)
+		favouriteGenres, err := GetUsersFavouriteGenres(c, client, userId)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -283,9 +286,10 @@ func GetRecommendedMovies() gin.HandlerFunc {
 			},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(c, 100*time.Second)
 		defer cancel()
 
+		var movieCollection *mongo.Collection = database.OpenCollection("movies", client)
 		cursor, err := movieCollection.Find(ctx, filter, findOptions)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"error": "Error fetching recommended movies"}})
@@ -304,8 +308,8 @@ func GetRecommendedMovies() gin.HandlerFunc {
 	}
 }
 
-func GetUsersFavouriteGenres(userId string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+func GetUsersFavouriteGenres(c *gin.Context, client *mongo.Client, userId string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(c, 100*time.Second)
 	defer cancel()
 
 	filter := bson.M{"user_id": userId}
@@ -317,6 +321,7 @@ func GetUsersFavouriteGenres(userId string) ([]string, error) {
 	opts := options.FindOne().SetProjection(projection)
 
 	var result bson.M
+	var userCollection *mongo.Collection = database.OpenCollection("users", client)
 	err := userCollection.FindOne(ctx, filter, opts).Decode(&result)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
